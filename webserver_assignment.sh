@@ -55,8 +55,8 @@ function setup() {
         then
             echo "$dependency has not been found"
             #Send error and possible resolution to the handle_error function so the user can fix the problem themselves
-            handle_error "$dependency has not been found Install the dependency using: sudo apt-get install $dependency"
-            sudo apt-get install $dependency
+            sudo apt-get install $dependency || handle_error "$dependency has not been found Install the dependency using: sudo apt-get install $dependency"
+            
         else
             echo "$dependency has been found"
         fi
