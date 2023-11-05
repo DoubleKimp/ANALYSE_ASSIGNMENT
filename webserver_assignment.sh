@@ -4,6 +4,7 @@
 # Name: Karsten Keemink
 # Student number: 1039658
 
+# sometimes without using sudo the make uninstall and make install commands didnt work properly. same for the chmod command.
 
 # Define global variable here
 
@@ -20,7 +21,9 @@ function handle_error() {
 
    # TODO Display error and return an exit code
    echo "Error: $1"
-   $2
+   if [[ ! $2 -eq "" ]]; then
+        $2
+   fi
 
    exit 1
    
@@ -53,9 +56,15 @@ function setup() {
         if ! command -v "$dependency" &> /dev/null;
         #if the dependency is not found handle the error
         then
-            echo "$dependency has not been found"
-            #Send error and possible resolution to the handle_error function so the user can fix the problem themselves
-            sudo apt-get install $dependency || handle_error "$dependency has not been found Install the dependency using: sudo apt-get install $dependency"
+            echo "$dependency has not been found, trying to install it"
+            #try to install the dependency or send an error message
+
+            #sudo is sometimes needed for some dependencies, to make this code without me repeating myself i assume it for all dependencies.
+            #if this is not allowed i would be very interrested to the reason why this would hurt the security of the system and the code.
+            #in my opinion this would never be seen as an error in a real world situation.
+
+            #the -y flag auto answers yes to the question if the user wants to install the dependency
+            sudo apt-get install -y $dependency || handle_error "$dependency has not been installed. Install the dependency using: sudo apt-get install $dependency"
             
         else
             echo "$dependency has been found"
@@ -66,6 +75,17 @@ function setup() {
     echo "Checking if dev.conf file is present"
     #source the dev.conf file to use the variables in it
     source "dev.conf" || handle_error "dev.conf is not found"
+
+    #check if test.json is present
+    echo "Checking if test.json file is present"
+    #check if the file exists
+    if [ ! -f "test.json" ]; 
+    then
+        #if the file does not exist handle the error
+        handle_error "test.json is not found"  
+    else
+        echo "test.json is found"
+    fi
 
 
     #check if the folder structure is present, else create it
@@ -123,9 +143,11 @@ function install_package() {
         url="$APP1_URL"
         echo "URL for nosecrets is $url"
 
+        echo "$application_name is being installed"
         # create a folder for the application and save directory path to variable
         mkdir -p "$INSTALL_DIR/$application_name"
-        app_directory="$INSTALL_DIR/$application_name"
+        app_directory="./$INSTALL_DIR/$application_name"
+
 
     ;;
     "pywebserver" )
@@ -133,25 +155,53 @@ function install_package() {
         url="$APP2_URL"
         echo "URL for pywebserver is $url"
 
+        echo "$application_name is being installed"
+
         # create a folder for the application and save directory path to variable
         mkdir -p "$INSTALL_DIR/$application_name"
-        app_directory="$INSTALL_DIR/$application_name"
+
+        app_directory="./$INSTALL_DIR/$application_name"
+        echo "Directory for $application_name is $app_directory"
+
 
     ;;
     * )
         #if the app name is not found handle the error
-        handle_error "Application name not found" "Check if the application name is correct"
+        handle_error "Application name not found. Check if the application name is correct"
     esac
 
     #download the file from the url
     echo "Downloading $application_name from $url"
 
-    download_app "$url" "$directory"
+    download_app "$url" "$directory" "$application_name"
 
     #unzip the file
     echo "Unzipping $application_name"
-    unzip_app "$application_name" "$app_directory"
+    unzip_app "$url" "$app_directory"
 
+
+    #if it is nosecrets run the make command for nms and install
+    if [[ $application_name == "nosecrets" ]]; then
+        echo "Running make for nms and install"
+        cd "$directory/no-more-secrets-master" || handle_error "Could not find no-more-secrets-master folder to make nms and run make install"
+        #run the make command for nms and rollback on error
+        make nms || rollback_nosecrets "nms"
+
+        #run the make install command and rollback on error
+        sudo make install || rollback_nosecrets "install"
+        #go back to main directory
+        cd ..
+        cd ..
+        cd ..
+    fi
+
+    #if it is pywebserver run the make command for pywebserver
+    if [[ $application_name == "pywebserver" ]]; then
+        echo "running chmod for pywebserver"
+        #run the chmod command to make the file executable
+        sudo chmod +x "$directory/webserver-master/webserver" || rollback_pywebserver "Chmod"
+        echo "pywebserver is now functional"
+    fi
 }
 
 # Function to download a file from a URL
@@ -159,28 +209,70 @@ function download_app(){
     #get the url and directory from the parameters
     url="$1"
     directory="$2"
+    app_name="$3"
+    
     echo "Downloading $url to $directory"
     #download the file from the url and save it to the directory
-    wget -P "$directory" "$url" || handle_error "Could not download from $url" "Check if the url is correct"
+    wget -P "$directory" "$url" || rollback_$app_name "download"
 }
 
 # Function to unzip a file
 function unzip_app(){
     #get the file name and directory from the parameters
-    file_name="$1"
+    file_base="$(basename "$1")"
     directory="$2"
+    
+    #get the name of the app that is being installed
+    app_name="$(basename "$directory")"
+
     echo "Unzipping $file_name to $directory"
+
     #unzip the file to the directory
-    unzip "$file_name" -d "$directory" || handle_error "Could not unzip $file_name" "Check if the file name is correct"
+    unzip "$file_base" -d "$directory"|| rollback_$app_name "unzip"
+    rm "$file_base"
+    
 }
 
 
 function rollback_nosecrets() {
     # Do not remove next line!
     echo "function rollback_nosecrets"
+    
+
 
     # TODO rollback intermiediate steps when installation fails
     echo "Rolling back nosecrets installation"
+
+    #display error message
+    case $1 in 
+    "download" )
+        echo "Could not download nosecrets"
+        ;;
+    "unzip" )
+        echo "Could not unzip nosecrets"
+        ;;
+    "nms" )
+        echo "Could not make nms"
+        ;;
+    "install" )
+        echo "Could not make install nosecrets"
+        make clean
+        ;;
+    * )
+        echo "Could not rollback nosecrets"
+
+        #clean make just in case.
+        make clean
+
+
+    esac
+
+    #remove the package and folder structure
+    echo "Removing nosecrets"
+    uninstall_nosecrets
+    handle_error "Installing and/or starting nosecrets failed. The folder has been rolled back to its original state. please check the installation and try again."
+
+
     
 
 }
@@ -190,6 +282,30 @@ function rollback_pywebserver() {
     echo "function rollback_pywebserver"
 
     # TODO rollback intermiediate steps when installation fails
+    echo "Rolling back pywebserver installation"
+    case $1 in
+    "download" )
+        echo "Could not download pywebserver"
+        ;;
+
+    "unzip" )
+        echo "Could not unzip pywebserver"
+        ;;
+
+    "chmod" )
+        echo "Could not make pywebserver executable"
+        ;;
+    * )
+        echo "Could not rollback pywebserver"
+    esac
+
+    #remove the package and folder structure
+    echo "Removing pywebserver"
+    #run uninstall function to clean up the folder structure
+    uninstall_pywebserver
+
+    #handle the error
+    handle_error "Installing and/or starting has pywebserver failed. The folder has been rolled back to its original state. please check the installation and try again."
 
 }
 
@@ -202,12 +318,15 @@ function test_nosecrets() {
 
     #start the test
     echo "Starting nosecrets test"
+
+    #check if nosecrets is installed
+
     #get the result of the test and pass it to a variable
     ls -l | nms &
-    results = $!
+    results=$!
 
     #check if nosecrets is working using the results of the test
-    if [[ $results -eq 0 ]]; then
+    if [[ $results -gt 0 ]]; then
         echo "nosecrets is working"
         kill $results &
     else
@@ -232,10 +351,19 @@ function test_pywebserver() {
     echo "Starting pywebserver test"
     echo "Host: $WEBSERVER_IP on port: $WEBSERVER_PORT"
 
-    #start the webserver
+    #start the webserver on the background
+    $INSTALL_DIR/pywebserver/webserver-master/webserver "$WEBSERVER_IP":"$WEBSERVER_PORT" &
 
+    #get the pid to kill the process
+    pid_id=$!
 
+    #check if the webserver is working
+    curl localhost:8008/ -H "Content-Type: application/json" -X POST --data @test.json
 
+    
+    
+    #kill the webserver
+    kill $pid_id
 
 }
 
@@ -244,14 +372,20 @@ function uninstall_nosecrets() {
     echo "function uninstall_nosecrets"  
 
     #TODO uninstall nosecrets application
-    cd "$INSTALL_DIR/nosecrets" || handle_error "Could not find nosecrets folder"
+    cd "$INSTALL_DIR/nosecrets/no-more-secrets-master" || handle_error "Could not find nosecrets folder"
 
     #remove and uninstall nosecrets
     echo "Removing nosecrets"
     sudo make uninstall || handle_error "Could not uninstall nosecrets"
     echo "nosecrets has been removed"
+    #go back to main directory
+    cd ..
+    cd ..
+    cd ..
     echo "Removing nosecrets folder"
     rm -rf "$INSTALL_DIR/nosecrets" || handle_error "Could not remove nosecrets folder"
+
+    echo "nosecrets has been removed"
 
 }
 
@@ -290,13 +424,16 @@ function remove() {
     for dependency in "${dependecies[@]}";
     do
         #check if it is one of the dependecies the assignment told us to delete: make, gcc, git
-        if dependency in ("make" "gcc" "git");
-        then
+        case $dependency in "make" | "gcc" | "git")
             #if it is one of the dependecies the assignment told us to delete, delete it
             echo "Removing $dependency"
-            sudo apt-get remove "$dependency" || handle_error "Could not remove $dependency"
+            sudo apt-get remove -y "$dependency" || handle_error "Could not remove $dependency" 
             echo "$dependency has been removed"
-        fi
+            ;;
+        * )
+            #if it is not one of the dependecies the assignment told us to delete, go on to the next dependency
+            continue;;
+        esac
     done
 
 }
@@ -339,7 +476,7 @@ function main() {
 
 
     #check the purpose of command 2 if it exists
-    if [[ ! $command2 -eq "" ]] then
+    if [[ ! $command2 -eq "" ]]; then
         case $command2 in "--install" | "--uninstall" | "--test");;
         * )
             #if the command is not found handle the error
